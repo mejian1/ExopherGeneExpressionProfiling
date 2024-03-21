@@ -1,0 +1,154 @@
+# This script assumes you have a GFF file with C. elegans gene annotations.
+
+def extract_protein_coding_genes(gff_file):
+    protein_coding_genes = []
+
+    with open(gff_file, 'r') as file:
+        for line in file:
+            if line.startswith('#'):
+                continue  # Skip header lines
+
+            fields = line.strip().split('\t')
+            if len(fields) < 9:
+                continue  # Skip incomplete lines
+
+            feature_type = fields[2]
+            attributes = fields[8]
+
+            # Check if the feature is a protein-coding gene
+            if feature_type == 'gene' and 'gene_biotype=protein_coding' in attributes:
+                # Extract the gene ID
+                gene_id = None
+                for attribute in attributes.split(';'):
+                    if attribute.startswith('ID='):
+                        gene_id = attribute.split('=')[1]
+                        break
+
+                if gene_id:
+                    protein_coding_genes.append(gene_id)
+
+    return protein_coding_genes
+
+# Example usage:
+# protein_coding_genes = extract_protein_coding_genes('c_elegans.gff')
+# print(protein_coding_genes)
+
+# Note: Replace 'c_elegans.gff' with the path to your actual GFF file containing C. elegans gene annotations.
+
+#Please replace 'c_elegans.gff' with the path to your GFF file and run the script to extract the protein-coding genes.
+
+Certainly! The Python script provided is designed to parse a GFF (Generic Feature Format) file, which is commonly used to describe gene features and annotations in bioinformatics. Here's a step-by-step explanation of the script's logic:
+
+1. **Function Definition**: The script defines a function `extract_protein_coding_genes` that takes one argument, `gff_file`, which is the path to the GFF file containing the gene annotations for *C. elegans*.
+
+2. **Initialization**: Inside the function, a list named `protein_coding_genes` is initialized to store the IDs of the protein-coding genes.
+
+3. **File Reading**: The script opens the GFF file in read mode and iterates over each line in the file.
+
+4. **Header Skipping**: If a line starts with a `#`, it's considered a header or comment and is skipped.
+
+5. **Line Parsing**: Each line is split into fields using the tab character as a delimiter. The script checks if there are at least 9 fields, which is the standard for GFF files.
+
+6. **Feature Type Checking**: The third field in a GFF line indicates the feature type (e.g., gene, mRNA, exon). The script checks if this field is 'gene'.
+
+7. **Attribute Parsing**: The ninth field contains attributes as a semicolon-separated list. The script looks for the attribute `gene_biotype=protein_coding` to identify protein-coding genes.
+
+8. **Gene ID Extraction**: If the feature is a protein-coding gene, the script extracts the gene ID from the attributes. It looks for the `ID` attribute and splits it to get the actual ID value.
+
+9. **Storing Gene IDs**: The extracted gene IDs are appended to the `protein_coding_genes` list.
+
+10. **Return Value**: After processing the entire file, the function returns the list of protein-coding gene IDs.
+
+11. **Example Usage**: The commented-out section at the bottom shows how you would call the function and print the results. You need to uncomment these lines and provide the path to your GFF file to use the script.
+
+This script is a basic example and assumes a standard GFF format. Depending on the specific format of your GFF file, you might need to adjust the script accordingly. If you have a different format or additional requirements, let me know, and I can help modify the script for you.
+
+            Extracting genes 
+
+You can download C. elegans gene annotations in GFF format from several databases. One of the most commonly used resources is WormBase, which provides comprehensive data on the genetics, genomics, and biology of C. elegans.
+Here’s a general guide on how to download the GFF file:
+	1	Visit the WormBase website or another database that hosts C. elegans genomic data.
+	2	Navigate to the downloads or data section.
+	3	Look for the GFF files corresponding to the latest release or the specific version you need.
+	4	Download the GFF file to your local machine.
+For example, you can use the FTP link provided by WormBase to directly download the GFF file1 (https://learn.gencore.bio.nyu.edu/ngs-file-formats/gff3-format/). Make sure to decompress the file if it’s in a compressed format like .gz. 
+
+           Gene annotation in the C. elegans genome
+
+import re
+
+def extract_and_sort_genes(gff_file):
+    genes = []
+
+    with open(gff_file, 'r') as file:
+        for line in file:
+            if line.startswith('#'):
+                continue  # Skip header lines
+
+            fields = line.strip().split('\t')
+            if len(fields) < 9:
+                continue  # Skip incomplete lines
+
+            feature_type = fields[2]
+            attributes = fields[8]
+
+            # Check if the feature is a gene
+            if feature_type == 'gene':
+                # Extract the gene ID and location data
+                gene_id = None
+                gene_family = None
+                chromosome = fields[0]
+                start = int(fields[3])
+                end = int(fields[4])
+
+                for attribute in attributes.split(';'):
+                    if attribute.startswith('ID='):
+                        gene_id = attribute.split('=')[1]
+                    if attribute.startswith('gene_family='):
+                        gene_family = attribute.split('=')[1]
+
+                if gene_id:
+                    genes.append((chromosome, start, end, gene_id, gene_family))
+
+    # Sort genes by chromosome and start position
+    genes.sort(key=lambda x: (x[0], x[1]))
+
+    # Identify clustered genes (functionally related genes that are close to each other)
+    clustered_genes = []
+    for i in range(len(genes) - 1):
+        current_gene = genes[i]
+        next_gene = genes[i + 1]
+        # Check if the genes are on the same chromosome and within a certain distance
+        if current_gene[0] == next_gene[0] and abs(current_gene[2] - next_gene[1]) < 10000:
+            # Check if the genes belong to the same gene family
+            if current_gene[4] == next_gene[4]:
+                clustered_genes.append((current_gene, next_gene))
+
+    return genes, clustered_genes
+
+# Example usage:
+# genes, clustered_genes = extract_and_sort_genes('c_elegans.gff')
+# print("Sorted genes by location:")
+# for gene in genes:
+#     print(gene)
+# print("\nClustered genes:")
+# for cluster in clustered_genes:
+#     print(cluster)
+
+# Note: Replace 'c_elegans.gff' with the path to your actual GFF file containing C. elegans gene annotations.
+# The distance threshold for clustering can be adjusted as needed.
+
+##This script will sort the genes by their chromosome and start position. It also identifies clusters of genes that are functionally related and are close to each other on the chromosome, based on a distance threshold (which you can adjust as needed). Remember to replace 'c_elegans.gff' with the path to your actual GFF file
+
+For example, the line below is a code that 
+genes.sort(key=lambda x: (x[0], x[1]))
+
+	1	This lambda function takes a gene tuple x and returns a tuple (x[0], x[1]), which contains the chromosome and start position. The sort function uses this returned tuple to determine the order of the genes.
+	2	Multiple-Level Sorting: The sorting is done in multiple levels:
+	◦	Primary Sort Key: The first element of the key tuple (x[0]) is the chromosome. This means that genes will be grouped by chromosome.
+	◦	Secondary Sort Key: The second element (x[1]) is the start position. Within each chromosome group, genes will be ordered by their start position.
+	3	Stable Sorting: Python’s sort function is stable, which means that if two elements have the same key, their original order is preserved. This is important when sorting by multiple criteria.
+	4	In-Place Sorting: The sort function sorts the list in place, meaning it modifies the original list rather than creating a new sorted list.
+	5	Cluster Identification: After sorting, the script iterates through the sorted list to identify clusters of functionally related genes. It checks if consecutive genes are on the same chromosome and within a certain distance threshold (e.g., 10,000 base pairs). If they also belong to the same gene family, they are considered a cluster.
+The result is a list of genes sorted first by chromosome and then by their start position on the chromosome, with clustered genes identified based on proximity and gene family. This allows for easy analysis of gene locatio
+ns and potential functional relationships between nearby genes.
