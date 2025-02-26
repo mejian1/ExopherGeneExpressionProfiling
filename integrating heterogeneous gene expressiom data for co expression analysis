@@ -1,0 +1,77 @@
+#integration of heterogeneous expression data to determine co-expression
+
+# Load necessary libraries
+library(DESeq2)
+library(sva) # for batch effect correction
+library(limma) # for microarray analysis
+library(Biobase) # for ExpressionSet objects
+
+# Import datasets
+# Replace file names with your actual file names
+
+# RNA-seq data
+count_data <- read.csv("fasting_RNAseq_counts.csv", row.names = 1)
+metadata_RNAseq <- read.csv("fasting_RNAseq_metadata.csv", row.names = 1)
+
+# mdt-15(RNAi) microarray data
+mdt15_expression <- read.table("mdt15_microarray_expression.txt", header = TRUE, row.names = 1)
+mdt15_metadata <- read.csv("mdt15_microarray_metadata.csv", row.names = 1)
+
+# sbp-1(RNAi) microarray data
+sbp1_expression <- read.table("sbp1_microarray_expression.txt", header = TRUE, row.names = 1)
+sbp1_metadata <- read.csv("sbp1_microarray_metadata.csv", row.names = 1)
+
+# hsf-1 heat shock microarray data
+hsf1_expression <- read.table("hsf1_microarray_expression.txt", header = TRUE, row.names = 1)
+hsf1_metadata <- read.csv("hsf1_microarray_expression.txt", header = TRUE, row.names = 1)
+
+# Create ExpressionSet objects for microarray data
+mdt15_eset <- ExpressionSet(assayData = as.matrix(mdt15_expression), 
+                            phenoData = AnnotatedDataFrame(mdt15_metadata))
+sbp1_eset <- ExpressionSet(assayData = as.matrix(sbp1_expression), 
+                           phenoData = AnnotatedDataFrame(sbp1_metadata))
+hsf1_eset <- ExpressionSet(assayData = as.matrix(hsf1_expression), 
+                           phenoData = AnnotatedDataFrame(hsf1_metadata))
+
+# Normalize microarray data using normalizeBetweenArrays from limma
+mdt15_eset <- normalizeBetweenArrays(mdt15_eset)
+sbp1_eset <- normalizeBetweenArrays(sbp1_eset)
+hsf1_eset <- normalizeBetweenArrays(hsf1_eset)
+
+# Convert RNA-seq data to DESeqDataSet
+dds <- DESeqDataSetFromMatrix(countData = count_data,
+                              colData = metadata_RNAseq,
+                              design = ~ condition) # Replace "condition" with your experimental factor
+
+# Run DESeq2 for normalization and differential expression analysis
+dds <- DESeq(dds)
+normalized_counts <- counts(dds, normalized = TRUE)
+
+# Merge expression data
+# Ensure consistent gene identifiers across datasets
+merged_expression <- cbind(normalized_counts, 
+                           exprs(mdt15_eset), 
+                           exprs(sbp1_eset), 
+                           exprs(hsf1_eset))
+
+# Merge metadata
+merged_metadata <- rbind(metadata_RNAseq, 
+                         pData(mdt15_eset), 
+                         pData(sbp1_eset), 
+                         pData(hsf1_eset))
+
+# Add dataset identifier to metadata
+merged_metadata$dataset <- c(rep("RNAseq", nrow(metadata_RNAseq)),
+                             rep("mdt15", nrow(mdt15_metadata)),
+                             rep("sbp1", nrow(sbp1_metadata)),
+                             rep("hsf1", nrow(hsf1_metadata)))
+
+# Batch effect correction using ComBat
+# Ensure 'dataset' is a factor in your metadata
+merged_metadata$dataset <- as.factor(merged_metadata$dataset)
+batch_corrected_expression <- ComBat(dat = merged_expression, 
+                                      batch = merged_metadata$dataset, 
+                                      mod = model.matrix(~ condition, data = merged_metadata)) # Adjust model if needed
+
+# Proceed with co-expression analysis
+# ...
