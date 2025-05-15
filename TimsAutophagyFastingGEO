@@ -1,0 +1,42 @@
+#Done on Google coLab Pro
+#import libraries
+
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+file_path = '/content/autophagy_protein_for_heatmap.csv'
+data = pd.read_csv(file_path)
+data.drop_duplicates(inplace=True)
+
+# Set 'Public Name' as index
+data.set_index('prot', inplace=True)
+
+# Select numerical columns for heatmap
+selected_df = data[['0avg', '3avg', '6avg']]
+
+# Set color palette
+custom_palette = sns.color_palette("Spectral", as_cmap=True)
+# Define the custom color palette (if needed)
+# custom_palette = plt.cm.colors.LinearSegmentedColormap.from_list(
+#     "custom_palette", ["#FF0000", "#990000", "black", "#009900", "#00FF00"]
+# )
+
+# Create Clustermap (hierarchical heatmap)
+sns.clustermap(
+    selected_df,
+    cmap=custom_palette,
+    linecolor='black',
+    standard_scale=None,  # Or 1 for row-wise scaling
+    figsize=(10, 8),
+    vmin=-5,
+    vmax=5,
+    yticklabels=True,  # Show 'Public Name' as y-axis labels
+    col_cluster=False
+)
+
+# Set title
+plt.title('Heatmap of Autophagy Proteins Under Fasting Conditions')
+
+# Show the plot
+plt.show()
