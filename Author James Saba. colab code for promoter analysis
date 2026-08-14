@@ -1,0 +1,170 @@
+# ============================================================================
+# Extract gene-body + promoter sequences for genes of interest
+# (sbp-1, nhr-49, mdt-15) from WormBase ParaSite BioMart
+#
+# Corrected/tested version of James's original notebook cell.
+# Every query below was run live against the real server before being
+# included here -- see chat for the full list of bugs this fixes.
+#
+# RUNTIME NOTE: this needs NO GPU and negligible RAM (we're pulling a few
+# KB of sequence for 3 genes). Standard Colab runtime is enough -- don't
+# spend Pro/High-RAM/A100 credits on this step. Save those for the
+# Boltz-2/AlphaFold or deep-learning stages of the pipeline.
+# ============================================================================
+
+# --- Step 0: setup -----------------------------------------------------------
+!pip install -q --upgrade pybiomart requests pandas
+
+import warnings
+import requests
+import pandas as pd
+from pybiomart import Dataset
+
+warnings.filterwarnings("ignore")
+
+HOST = "parasite.wormbase.org"        # NOTE: no "https://" prefix. pybiomart
+                                       # builds the URL itself; passing a scheme
+                                       # breaks host resolution (confirmed bug).
+VIRTUAL_SCHEMA = "parasite_mart"      # confirmed via the server's own registry
+                                       # (?type=registry) -- NOT pybiomart's
+                                       # default "default" schema.
+SPECIES = "caelegprjna13758"          # WormBase ParaSite's internal species code
+                                       # for C. elegans PRJNA13758 (confirmed via
+                                       # the dataset's filter configuration).
+
+GENE_SYMBOLS = ["sbp-1", "nhr-49", "mdt-15" "perm-2", "perm-4", "daf-16", "act-1"] #change gene names
+UPSTREAM_BP = 1000   # promoter window, bp upstream of the annotated gene start.
+                      # C. elegans intergenic regions are compact; 500-2000 bp
+                      # is the typical working range for TF motif scanning.
+
+ds = Dataset(name="wbps_gene", host=HOST, virtual_schema=VIRTUAL_SCHEMA)
+
+
+# --- Step 1: resolve gene symbols -> WBGene stable IDs ------------------------
+# WHY: 'external_gene_id' (symbol) is readable as an attribute but is NOT a
+# valid filter on this dataset (BioMart returns "Filter external_gene_id
+# NOT FOUND" if you try). So we pull the species' full gene_id<->symbol table
+# once (~47k rows, a couple hundred KB, a few seconds) and match locally.
+all_genes = ds.query(
+    attributes=["wbps_gene_id", "external_gene_id"],
+    filters={"species_id_1010": SPECIES},
+).rename(columns={"Gene stable ID": "wbgene_id", "Gene name": "gene_symbol"})
+
+id_map = all_genes[all_genes["gene_symbol"].isin(GENE_SYMBOLS)].reset_index(drop=True)
+missing = set(GENE_SYMBOLS) - set(id_map["gene_symbol"])
+if missing:
+    raise ValueError(f"Could not resolve symbol(s) to a WBGene ID: {missing}. "
+                      f"Check spelling against wormbase.org.")
+
+print("Resolved gene IDs:")
+print(id_map.to_string(index=False))
+wbgene_ids = id_map["wbgene_id"].tolist()
+
+
+# --- Step 2: gene coordinates (sanity-check strand/chromosome) ---------------
+coords = ds.query(
+    attributes=["wbps_gene_id", "external_gene_id", "chromosome_name",
+                "start_position", "end_position", "strand", "gene_biotype"],
+    filters={"species_id_1010": SPECIES, "link_wbps_gene_id": wbgene_ids},
+).rename(columns={
+    "Gene stable ID": "wbgene_id", "Gene name": "gene_symbol",
+    "Chromosome/scaffold name": "chromosome", "Gene start (bp)": "start",
+    "Gene end (bp)": "end", "Strand": "strand", "Gene biotype": "biotype",
+})
+print("\nGene coordinates:")
+print(coords.to_string(index=False))
+
+
+# --- Step 3: gene-body sequences (CDS, full mRNA, protein) -------------------
+# WHY not the original wget block: BioMart serves these directly for exactly
+# the genes you ask for -- no need to download/parse a genome-wide transcript
+# FASTA that (in the original code) never even got filtered.
+# NOTE: genes with multiple isoforms return one row per transcript. We keep
+# everything but flag the longest-CDS transcript per gene as "canonical".
+def fetch_sequence(attr_name, out_colname):
+    df = ds.query(
+        attributes=["wbps_gene_id", "external_gene_id", "wbps_transcript_id", attr_name],
+        filters={"species_id_1010": SPECIES, "link_wbps_gene_id": wbgene_ids},
+    )
+    id_cols = {"Gene stable ID": "wbgene_id", "Gene name": "gene_symbol",
+               "Transcript stable ID": "transcript_id"}
+    df = df.rename(columns=id_cols)
+    seq_col = [c for c in df.columns if c not in id_cols.values()][0]
+    return df.rename(columns={seq_col: out_colname})
+
+cds_df = fetch_sequence("coding", "cds_seq")     # CDS only (start->stop codon)
+cdna_df = fetch_sequence("cdna", "cdna_seq")     # full spliced mRNA incl. UTRs
+pep_df = fetch_sequence("peptide", "peptide_seq")  # protein sequence
+
+cds_df["cds_len"] = cds_df["cds_seq"].str.len()
+canonical = cds_df.loc[cds_df.groupby("wbgene_id")["cds_len"].idxmax()].reset_index(drop=True)
+canon_transcripts = set(canonical["transcript_id"])
+
+print("\nCanonical (longest-CDS) transcript per gene:")
+print(canonical[["gene_symbol", "transcript_id", "cds_len"]].to_string(index=False))
+
+
+# --- Step 4: promoter (upstream flanking) sequences ---------------------------
+# WHY raw request instead of pybiomart here: 'gene_flank' + 'upstream_flank'
+# are real, working filters/attributes on the BioMart server (verified
+# directly against the martservice endpoint) but pybiomart's own filter
+# introspection doesn't expose 'upstream_flank' -- it raises "Unknown filter
+# upstream_flank" even with everything else fixed. So for promoters we speak
+# BioMart's XML query language directly over HTTP, bypassing the wrapper.
+# gene_flank is strand-aware automatically: it always returns the sequence
+# immediately 5' of the gene regardless of + or - strand (confirmed).
+def fetch_promoters(gene_ids, upstream_bp):
+    query_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE Query>
+<Query virtualSchemaName="{VIRTUAL_SCHEMA}" formatter="FASTA" header="1" uniqueRows="1" count="" datasetConfigVersion="0.6">
+  <Dataset name="wbps_gene" interface="default">
+    <Filter name="species_id_1010" value="{SPECIES}"/>
+    <Filter name="link_wbps_gene_id" value="{",".join(gene_ids)}"/>
+    <Filter name="upstream_flank" value="{upstream_bp}"/>
+    <Attribute name="wbps_gene_id"/>
+    <Attribute name="external_gene_id"/>
+    <Attribute name="gene_flank"/>
+  </Dataset>
+</Query>"""
+    resp = requests.post(f"https://{HOST}/biomart/martservice",
+                          data={"query": query_xml}, timeout=60)
+    resp.raise_for_status()
+    if resp.text.startswith("Query ERROR"):
+        raise RuntimeError(resp.text)
+    return resp.text
+
+promoter_fasta = fetch_promoters(wbgene_ids, UPSTREAM_BP)
+print(f"\nFetched {UPSTREAM_BP} bp promoters for {promoter_fasta.count('>')} genes.")
+
+
+# --- Step 5: write everything out --------------------------------------------
+with open("promoters_%dbp.fasta" % UPSTREAM_BP, "w") as f:
+    f.write(promoter_fasta)
+
+with open("cds_canonical.fasta", "w") as f:
+    for _, r in canonical.iterrows():
+        f.write(f">{r.wbgene_id}|{r.gene_symbol}|{r.transcript_id}\n{r.cds_seq}\n")
+
+with open("peptide_canonical.fasta", "w") as f:
+    for _, r in pep_df[pep_df["transcript_id"].isin(canon_transcripts)].iterrows():
+        f.write(f">{r.wbgene_id}|{r.gene_symbol}|{r.transcript_id}\n{r.peptide_seq}\n")
+
+with open("cdna_all_isoforms.fasta", "w") as f:
+    for _, r in cdna_df.iterrows():
+        f.write(f">{r.wbgene_id}|{r.gene_symbol}|{r.transcript_id}\n{r.cdna_seq}\n")
+
+coords.to_csv("gene_coordinates.csv", index=False)
+
+summary = coords.merge(
+    canonical[["wbgene_id", "transcript_id", "cds_len"]], on="wbgene_id"
+)
+summary["promoter_bp"] = UPSTREAM_BP
+print("\n=== Summary ===")
+print(summary.to_string(index=False))
+
+print("\nFiles written:")
+print(f"  promoters_{UPSTREAM_BP}bp.fasta   -- upstream flank per gene")
+print("  cds_canonical.fasta          -- longest-isoform CDS per gene")
+print("  peptide_canonical.fasta      -- matching protein sequences")
+print("  cdna_all_isoforms.fasta      -- every annotated transcript's full mRNA")
+print("  gene_coordinates.csv         -- chromosome/start/end/strand/biotype")
